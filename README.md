@@ -174,7 +174,6 @@ The app only calls your API; set the base URL per environment:
 |-------------|----------------------|
 | Desktop / same machine | `http://127.0.0.1:8000` |
 | Android emulator | `http://10.0.2.2:8000` |
-| Physical device on Wi‑Fi | `http://<your-PC-LAN-IP>:8000` |
 
 ```bash
 cd frontend/hr_assistant
