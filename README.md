@@ -1,139 +1,243 @@
-<p align="center">
-  <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-      <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.svg">
-      <img height="100" alt="Endee" src="docs/assets/logo-dark.svg">
-  </picture>
-</p>
+# Private HR Assistant (Endee + RAG)
 
-<p align="center">
-    <b>High-performance open-source vector database for AI search, RAG, semantic search, and hybrid retrieval.</b>
-</p>
+A privacy-oriented demo for HR teams: **semantic search and RAG over sensitive PDFs** (resumes, performance reviews) using a **Flutter** client, a **Python (FastAPI)** backend, and **[Endee](https://docs.endee.io/)** as the vector database. Retrieval is augmented with a **local LLM (Ollama)** by default, with an optional **cloud LLM** for convenience.
 
-<p align="center">
-    <a href="./docs/getting-started.md"><img src="https://img.shields.io/badge/Quick_Start-Local_Setup-success?style=flat-square" alt="Quick Start"></a>
-    <a href="https://docs.endee.io/quick-start"><img src="https://img.shields.io/badge/Docs-Quick_Start-success?style=flat-square" alt="Docs"></a>
-    <a href="https://github.com/endee-io/endee/blob/master/LICENSE"><img src="https://img.shields.io/github/license/endee-io/endee?style=flat-square" alt="License"></a>
-    <a href="https://discord.gg/5HFGqDZQE3"><img src="https://img.shields.io/badge/Discord-Join_Chat-5865F2?logo=discord&style=flat-square" alt="Discord"></a>
-    <a href="https://endee.io/"><img src="https://img.shields.io/badge/Website-Endee-111111?style=flat-square" alt="Website"></a>
-    <!-- <a href="https://endee.io/benchmarks"><img src="https://img.shields.io/badge/Benchmarks-Coming_Soon-1F8B4C?style=flat-square" alt="Benchmarks"></a> -->
-    <!-- <a href="https://endee.io/cloud"><img src="https://img.shields.io/badge/Cloud-Coming_Soon-2496ED?style=flat-square" alt="Cloud"></a> -->
-</p>
+---
 
-<p align="center">
-<strong><a href="./docs/getting-started.md">Quick Start</a> • <a href="#why-endee">Why Endee</a> • <a href="#use-cases">Use Cases</a> • <a href="#features">Features</a> • <a href="#api-and-clients">API and Clients</a> • <a href="#docs-and-links">Docs</a> • <a href="#community-and-contact">Contact</a></strong>
-</p>
+## Project overview
 
-# Endee: Open-Source Vector Database for AI Search
+HR workflows depend on **highly sensitive text** that should not be treated like ordinary documents in a typical vector stack. Many RAG demos send **plaintext or raw embeddings** to a database that can read and index them as usual—which means a **database or backup breach** can expose employee content or reversible embedding payloads.
 
-**Endee** is a high-performance open-source vector database built for AI search and retrieval workloads. It is designed for teams building **RAG pipelines**, **semantic search**, **hybrid search**, recommendation systems, and filtered vector retrieval APIs that need production-oriented performance and control.
+This project demonstrates a **privacy-first split**:
 
-Endee combines vector search with filtering, sparse retrieval support, backup workflows, and deployment flexibility across local builds and Docker-based environments. The project is implemented in C++ and optimized for modern CPU targets, including AVX2, AVX512, NEON, and SVE2.
+- **Endee** stores **encrypted / queryable-encrypted vectors** and serves **similarity search** without needing plaintext vectors on the server in the same way a traditional vector DB does.
+- **Chunk text** (the actual resume or review wording) stays in a **separate application database (SQLite)** on the API host, under your access controls—not in the vector store as searchable plaintext.
 
-If you want the fastest path to evaluate Endee locally, start with the [Getting Started guide](./docs/getting-started.md) or the hosted docs at [docs.endee.io](https://docs.endee.io/quick-start).
+Together with **local embeddings** and an optional **local LLM**, you can tell a credible story: *privacy is part of the design, not an afterthought.*
 
-## Why Endee
+---
 
-- Built as a dedicated vector database for AI applications, search systems, and retrieval-heavy workloads.
-- Supports dense vector retrieval plus sparse search capabilities for hybrid search use cases.
-- Includes payload filtering for metadata-aware retrieval and application-specific query logic.
-- Ships with operational features already documented in this repo, including backup flows and runtime observability.
-- Offers flexible deployment paths: local scripts, manual builds, Docker images, and prebuilt registry images.
+## Problem statement
 
-## Getting Started
+| Challenge | What this project does |
+|-----------|-------------------------|
+| Sensitive PDFs must support **semantic search** and **Q&A** | Chunk PDFs, embed with a **local** sentence-transformer model, index vectors in **Endee**, answer with **RAG**. |
+| A **vector DB breach** should not trivially leak employee content | **No full chunk text** is stored in Endee—only vectors plus **opaque IDs and filter codes**; text lives in **SQLite** on the backend. |
+| Mobile/client must not hold secrets | **Flutter** talks only to **FastAPI**; **no Endee keys** or model keys ship in the app. |
+| Some teams want **no third-party LLM** | Default generation uses **Ollama** on your machine; **OpenAI** is opt-in via env. |
 
-The full installation, build, Docker, runtime, and authentication instructions are in [docs/getting-started.md](./docs/getting-started.md).
+---
 
-Fastest local path:
+## System design and technical approach
 
-```bash
-chmod +x ./install.sh ./run.sh
-./install.sh --release --avx2
-./run.sh
+### Architecture
+
+```mermaid
+flowchart LR
+  subgraph client [Flutter client]
+    UI[Upload_Search_Chat]
+  end
+  subgraph api [FastAPI backend]
+    PDF[PDF_extract_and_chunk]
+    EMB[Local_embeddings]
+    SQLITE[(SQLite_text_vault)]
+    RAG[RAG_orchestrator]
+    AG[Agent_pipeline]
+    OLL[Ollama]
+    CLOUD[Optional_OpenAI]
+  end
+  subgraph endee [Endee vector DB]
+    IDX[HNSW_index]
+  end
+  UI -->|HTTPS_Bearer_or_JWT| PDF
+  UI --> RAG
+  PDF --> SQLITE
+  PDF --> EMB
+  EMB -->|Python_SDK_upsert| IDX
+  RAG -->|query_vector| IDX
+  RAG --> SQLITE
+  RAG --> OLL
+  RAG --> CLOUD
+  AG --> RAG
 ```
 
-The server listens on port `8080`. For detailed setup paths, supported operating systems, CPU optimization flags, Docker usage, and authentication examples, use:
+### Data flow (ingestion)
 
-- [Getting Started](./docs/getting-started.md)
-- [Hosted Quick Start Docs](https://docs.endee.io/quick-start)
+1. User uploads a **PDF** through the Flutter app to the backend.
+2. Text is extracted and **chunked** (with page hints for citations).
+3. Each chunk is embedded with **sentence-transformers** (local; no external embedding API in the default path).
+4. **SQLite** stores chunk **text** and document metadata.
+5. **Endee** receives **one vector per chunk**, with `meta`/`filter` fields for **document id, page, department code, doc type**—not the raw paragraph text.
 
-## Use Cases
+### Data flow (query / RAG)
 
-### RAG and AI Retrieval
+1. User question → **same embedding model** → **Endee `query`** → top‑k chunk **IDs**.
+2. Backend loads **text** for those IDs from **SQLite** and builds a **cited context** block.
+3. **Ollama** (default) or **OpenAI** (if enabled) generates an answer **grounded in those excerpts**.
 
-Use Endee as the retrieval layer for question answering, chat assistants, copilots, and other RAG applications that need fast vector search with metadata-aware filtering.
+### Other features
 
-### Agentic AI and AI Agent Memory
+- **Recommendations:** nearest-neighbor search over the same index (optional **dept** / **doc_type** filters).
+- **Agentic workflow:** a small server-side pipeline—**semantic search → list sources → summarize with citations**—exposed as `/agent/run` and tool routes.
 
-Use Endee as the long-term memory and context retrieval layer for AI agents built with frameworks like LangChain, CrewAI, AutoGen, and LlamaIndex. Store and retrieve past observations, tool outputs, conversation history, and domain knowledge mid-execution with low-latency filtered vector search, so your autonomous agents get the right context without stalling their reasoning loop.
+---
 
-### Semantic Search
+## How Endee is used
 
-Build semantic search experiences for documents, products, support content, and knowledge bases using vector similarity search instead of exact keyword-only matching.
+[Endee](https://docs.endee.io/) is a **high-performance vector database** with a **client-side security model**: vectors (and queries) are handled so the **server does not rely on storing plaintext vectors** like a conventional vector store. Practically, you use the **official Python SDK** (`pip install endee`) to:
 
-### Hybrid Search
+1. **Create an index** (e.g. cosine similarity, dimension matching your embedding model—here **384** for `all-MiniLM-L6-v2`).
+2. **Upsert** one record per chunk: `id`, **dense vector**, **metadata** (chunk/document IDs, page), and **filters** (e.g. `dept_code`, `doc_type` as opaque codes).
+3. **Query** with an embedding of the user question and optional **metadata filters** for scoped search.
 
-Combine dense retrieval, sparse vectors, and filtering to improve relevance for search workflows where both semantic understanding and term-level precision matter.
+**What to say in an interview (precise wording):**
 
-### Recommendations and Matching
+- Endee backs **semantic retrieval** with **encrypted / queryable-encrypted vectors**, so a **breach of the vector service** does not deliver the same risk profile as dumping **plaintext embeddings and text** from a classic DB.
+- **Honest caveat:** chunk **text** is still stored in **SQLite** for RAG; protect that host, use TLS in production, and treat **cloud LLM** mode as a separate trust boundary (snippets leave your network).
 
-Support recommendation, similarity matching, and nearest-neighbor retrieval workflows across text, embeddings, and other high-dimensional representations.
+---
 
-## Features
+## Setup and execution
 
-- **Vector search** for AI retrieval and semantic similarity workloads.
-- **Hybrid retrieval support** with sparse vector capabilities documented in [docs/sparse.md](./docs/sparse.md).
-- **Payload filtering** for structured retrieval logic documented in [docs/filter.md](./docs/filter.md).
-- **Backup APIs and flows** documented in [docs/backup-system.md](./docs/backup-system.md).
-- **Operational logging and instrumentation** documented in [docs/logs.md](./docs/logs.md) and [docs/mdbx-instrumentation.md](./docs/mdbx-instrumentation.md).
-- **CPU-targeted builds** for AVX2, AVX512, NEON, and SVE2 deployments.
-- **Docker deployment options** for local and server environments.
+### Prerequisites
 
-## API and Clients
+- **Docker** (for Endee; optional Ollama)
+- **Python 3.12+**
+- **Flutter SDK** (for the client)
 
-Endee exposes an HTTP API for managing indexes and serving retrieval workloads. The current repo documentation and examples focus on running the server directly and calling its API endpoints.
+### 1. Start Endee
 
-Current developer entry points:
+From the repository root:
 
-- [Getting Started](./docs/getting-started.md) for local build and run flows
-- [Hosted Docs](https://docs.endee.io/quick-start) for product documentation
-- [Release Notes 1.0.0](https://github.com/endee-io/endee/releases/tag/1.0.0) for recent platform changes
+```bash
+docker compose up -d endee
+```
 
-## Docs and Links
+The server listens on **`http://127.0.0.1:8080`** (API base `http://127.0.0.1:8080/api/v1`). Optional auth: set `NDD_AUTH_TOKEN` in `.env` and the same value as `ENDEE_AUTH_TOKEN` for the backend.
 
-- [Getting Started](./docs/getting-started.md)
-- [Hosted Documentation](https://docs.endee.io/quick-start)
-- [Release Notes](https://github.com/endee-io/endee/releases/tag/1.0.0)
-- [Sparse Search](./docs/sparse.md)
-- [Filtering](./docs/filter.md)
-- [Backups](./docs/backup-system.md)
+### 2. Optional: local LLM (Ollama)
 
-## Community and Contact
+```bash
+docker compose --profile llm up -d ollama
+docker exec -it ollama-server ollama pull llama3.2
+```
 
-- Join the community on [Discord](https://discord.gg/5HFGqDZQE3)
-- Visit the website at [endee.io](https://endee.io/)
-- For trademark or branding permissions, contact [enterprise@endee.io](mailto:enterprise@endee.io)
+Configure the backend with `OLLAMA_BASE_URL` and `OLLAMA_MODEL` (see `.env.example`).
 
-## Contributing
+### 3. Backend (FastAPI)
 
-We welcome contributions from the community to help make vector search faster and more accessible for everyone.
+```bash
+cd backend
+python -m venv .venv
+```
 
-- Submit pull requests for fixes, features, and improvements
-- Report bugs or performance issues through GitHub issues
-- Propose enhancements for search quality, performance, and deployment workflows
+**Windows (PowerShell):**
 
-## License
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item ..\.env.example .env
+# Edit .env: ENDEE_BASE_URL, API_BEARER_TOKEN, Ollama, etc.
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-Endee is open source software licensed under the **Apache License 2.0**. See the [LICENSE](./LICENSE) file for full terms.
+**macOS / Linux:**
 
-## Trademark and Branding
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+cp ../.env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-“Endee” and the Endee logo are trademarks of Endee Labs.
+**Smoke-test Endee** (with Endee running):
 
-The Apache License 2.0 does not grant permission to use the Endee name, logos, or branding in a way that suggests endorsement or affiliation.
+```powershell
+# Windows
+set ENDEE_BASE_URL=http://127.0.0.1:8080/api/v1
+python scripts\verify_endee.py
+```
 
-If you offer a hosted or managed service based on this software, you must use your own branding and avoid implying it is an official Endee service.
+```bash
+# macOS / Linux
+export ENDEE_BASE_URL=http://127.0.0.1:8080/api/v1
+python scripts/verify_endee.py
+```
 
-## Third-Party Software
+**Health check:** `GET http://127.0.0.1:8000/health`
 
-This project includes or depends on third-party software components licensed under their respective open-source licenses. Use of those components is governed by their own license terms.
+### 4. Flutter client
+
+The app only calls your API; set the base URL per environment:
+
+| Environment | Example API base URL |
+|-------------|----------------------|
+| Desktop / same machine | `http://127.0.0.1:8000` |
+| Android emulator | `http://10.0.2.2:8000` |
+| Physical device on Wi‑Fi | `http://<your-PC-LAN-IP>:8000` |
+
+```bash
+cd frontend/hr_assistant
+flutter pub get
+flutter run --dart-define=API_BASE=http://127.0.0.1:8000
+```
+
+In the app: use **Login (JWT)** or disable JWT and paste the **same token** as `API_BEARER_TOKEN` from `.env`.
+
+### 5. Optional: full stack in Docker
+
+```bash
+docker compose --profile full up -d --build
+```
+
+Add `--profile llm` if you want the Ollama container. Align `OLLAMA_BASE_URL` with your deployment (host vs container name).
+
+---
+
+## Configuration (summary)
+
+Copy `.env.example` to `backend/.env` and adjust:
+
+| Variable | Purpose |
+|----------|---------|
+| `ENDEE_BASE_URL` | Endee API base (default `http://127.0.0.1:8080/api/v1`) |
+| `ENDEE_AUTH_TOKEN` | Matches Docker `NDD_AUTH_TOKEN` if set |
+| `API_BEARER_TOKEN` | Static bearer for demos; Flutter can use without JWT |
+| `DATABASE_PATH` | SQLite path for chunk text |
+| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local RAG generation |
+| `USE_CLOUD_LLM` / `OPENAI_API_KEY` | Set `1` + key to use OpenAI instead of Ollama |
+
+---
+
+## API overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/auth/login` | Issue JWT for the Flutter client |
+| `GET` | `/health` | API + Endee connectivity |
+| `POST` | `/documents/upload` | Ingest PDF → SQLite + Endee vectors |
+| `GET` | `/documents` | List uploaded documents |
+| `POST` | `/search` | Semantic search; optional `dept_code`, `doc_type` |
+| `POST` | `/chat` | RAG answer + source list |
+| `POST` | `/recommendations/similar` | Similar chunks (same index; optional filters) |
+| `POST` | `/agent/run` | Agent pipeline: search → sources → summarize |
+| `POST` | `/tools/semantic_search` | Direct tool-style search |
+| `POST` | `/tools/hybrid_search` | Hybrid if index supports sparse; else dense fallback |
+| `POST` | `/tools/summarize_with_citations` | RAG with citations |
+
+---
+
+## Threat model (short)
+
+- **Endee:** vectors + structured filters; not the full text corpus.
+- **SQLite:** holds chunk text—secure the host, backups, and filesystem permissions.
+- **In memory:** PDF parsing and embedding process plaintext transiently.
+- **LLM:** **Ollama** keeps snippets on-machine; **cloud LLM** sends retrieved snippets to the vendor.
+
+---
+
+## References
+
+- [Endee documentation](https://docs.endee.io/)
+- [Endee Quick Start (Docker)](https://docs.endee.io/quick-start)
+- [Python SDK](https://docs.endee.io/python-sdk/quickstart)
