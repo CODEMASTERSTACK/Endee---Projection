@@ -90,11 +90,6 @@ flowchart LR
 2. **Upsert** one record per chunk: `id`, **dense vector**, **metadata** (chunk/document IDs, page), and **filters** (e.g. `dept_code`, `doc_type` as opaque codes).
 3. **Query** with an embedding of the user question and optional **metadata filters** for scoped search.
 
-**What to say in an interview (precise wording):**
-
-- Endee backs **semantic retrieval** with **encrypted / queryable-encrypted vectors**, so a **breach of the vector service** does not deliver the same risk profile as dumping **plaintext embeddings and text** from a classic DB.
-- **Honest caveat:** chunk **text** is still stored in **SQLite** for RAG; protect that host, use TLS in production, and treat **cloud LLM** mode as a separate trust boundary (snippets leave your network).
-
 ---
 
 ## Setup and execution
@@ -180,18 +175,6 @@ cd frontend/hr_assistant
 flutter pub get
 flutter run --dart-define=API_BASE=http://127.0.0.1:8000
 ```
-
-In the app: use **Login (JWT)** or disable JWT and paste the **same token** as `API_BEARER_TOKEN` from `.env`.
-
-### 5. Optional: full stack in Docker
-
-```bash
-docker compose --profile full up -d --build
-```
-
-Add `--profile llm` if you want the Ollama container. Align `OLLAMA_BASE_URL` with your deployment (host vs container name).
-
----
 
 ## Configuration (summary)
 
